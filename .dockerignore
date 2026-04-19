@@ -1,0 +1,20 @@
+# Python cache / virtualenv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Local state / logs
+state/
+*.log
+
+# Git / editor
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Local env files
+.env
