@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+blocked_files=()
+flagged_matches=()
+
+# Sensitive file types should never be committed from this repo.
+is_blocked_path() {
+  local path="$1"
+  case "$path" in
+    .env|.env.*)
+      [[ "$path" != ".env.example" ]]
+      return
+      ;;
+    *.pem|*.p12|*.pfx|*.jks|*.keystore|*.kdbx|id_rsa|id_ed25519|*.ovpn)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Patterns for common credential formats or hardcoded secret assignments.
+secret_regex='(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}|glpat-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[A-Za-z0-9-]{10,}|[0-9]{6,12}:[A-Za-z0-9_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(^|[^A-Za-z0-9_])(api[_-]?key|api[_-]?secret|secret|token|password|passwd)([^A-Za-z0-9_]|$)[[:space:]]*[:=][[:space:]]*["'\'']?[A-Za-z0-9_./+=-]{16,}["'\'']?)'
+
+# Known placeholders should not block legitimate template files.
+placeholder_regex='(your_|example|changeme|dummy|placeholder|sample|test[_-]?|fake|not_a_real_secret|\{token\}|<token>|<secret>)'
+
+while IFS= read -r -d '' path; do
+  if is_blocked_path "$path"; then
+    blocked_files+=("$path")
+  fi
+
+  if match=$(git show ":$path" | grep -niE -m 1 -- "$secret_regex" | grep -ivE -- "$placeholder_regex" || true); then
+    if [[ -n "$match" ]]; then
+      flagged_matches+=("$path:$match")
+    fi
+  fi
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+if (( ${#blocked_files[@]} > 0 )) || (( ${#flagged_matches[@]} > 0 )); then
+  echo "Commit blocked: possible sensitive data detected." >&2
+
+  if (( ${#blocked_files[@]} > 0 )); then
+    echo >&2
+    echo "Blocked file paths:" >&2
+    printf '  - %s\n' "${blocked_files[@]}" >&2
+  fi
+
+  if (( ${#flagged_matches[@]} > 0 )); then
+    echo >&2
+    echo "Suspicious content matches:" >&2
+    printf '  - %s\n' "${flagged_matches[@]}" >&2
+  fi
+
+  echo >&2
+  echo "Remove secrets from the staged changes, or move local values into .env / .env.local." >&2
+  echo "If this is a false positive, review the hook at .githooks/pre-commit before bypassing it." >&2
+  exit 1
+fi
